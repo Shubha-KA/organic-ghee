@@ -32,14 +32,14 @@
                 {{#each foods}}
                 <div class="col-md-4 my-5">
                     <div class="card ">
-                        <img style="height:210px" src="/static/dishImage/{{this.photo}}" class="img-fluid mb-2" alt="">
+                        <img style="height:210px" src="{{this.photoUrl}}" class="img-fluid mb-2" alt="">
                         <h4>{{this.dname}}</h4>
                         <p class="text-color">Time : {{this.dtime}} Minutes | Serve {{this.dserve}}</p>
                         <h2 class="primary-color mb-3"> <i class="fa fa-usd"></i>{{#discount this.dprice
                             this.ddiscount}}{{/discount}} <del class="text-muted"><i
                                     class="fa fa-usd"></i>{{this.dprice}}</del></h2>
                         <div>
-                            <button onclick="addFoodToBasket('{{this._id}}','{{this.dname}}','{{this.dprice}}','{{this.photo}}' )" class="main-btn">Add To Basket</button>
+                            <button onclick="addFoodToBasket('{{this._id}}','{{this.dname}}','{{this.dprice}}','{{this.photoUrl}}' )" class="main-btn">Add To Basket</button>
                         </div>
                     </div>
                 </div>

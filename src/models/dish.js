@@ -5,6 +5,7 @@ const dish=mongoose.Schema({
     dprice:Number,
     dtime:String,
     photo:String,
+    photoUrl:String,
     discription:String,
     ddiscount:Number,
     dserve:Number

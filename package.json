@@ -9,12 +9,21 @@
   "author": "rohit kawade",
   "license": "ISC",
   "dependencies": {
-    "body-parser": "^1.20.0",
-    "express": "^4.19.2",
+    "@azure/identity": "^4.10.2",
+    "@azure/msal-node": "^5.2.3",
+    "@azure/storage-blob": "^12.28.0",
+    "@azure/storage-queue": "^12.27.0",
+    "bcrypt": "^6.0.0",
+    "body-parser": "^2.2.2",
+    "connect-mongo": "^5.1.0",
+    "express": "^5.2.1",
     "express-fileupload": "^1.4.0",
-    "express-session": "^1.17.3",
-    "hbs": "^4.2.0",
-    "mongoose": "^6.6.5",
-    "node-localstorage": "^2.2.1"
+    "express-session": "^1.19.0",
+    "hbs": "^4.2.1",
+    "helmet": "^8.1.0",
+    "mongoose": "^9.6.3"
+  },
+  "overrides": {
+    "handlebars": "^4.7.9"
   }
 }

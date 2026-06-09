@@ -1,0 +1,157 @@
+name: Terraform
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+        default: dev
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  TERRAFORM_VERSION: "1.8.5"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - run: terraform fmt -check -recursive
+        working-directory: terraform
+      - run: terraform init -backend=false
+        working-directory: terraform
+      - run: terraform validate
+        working-directory: terraform
+
+  plan:
+    if: github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+    env:
+      TF_VAR_database_connection_string: ${{ secrets.DATABASE_CONNECTION_STRING }}
+    outputs:
+      environment: ${{ steps.target.outputs.environment }}
+      plan_name: ${{ steps.target.outputs.plan_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: target
+        shell: bash
+        run: |
+          TARGET="${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}"
+          echo "environment=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "plan_name=tfplan-$TARGET" >> "$GITHUB_OUTPUT"
+      - name: Validate production application URL
+        if: steps.target.outputs.environment == 'prod'
+        shell: bash
+        env:
+          APPLICATION_BASE_URL: ${{ vars.APPLICATION_BASE_URL }}
+        run: |
+          if [[ ! "$APPLICATION_BASE_URL" =~ ^https:// ]] ||
+             [[ "$APPLICATION_BASE_URL" == *".azurewebsites.net"* ]] ||
+             [[ "$APPLICATION_BASE_URL" == *".invalid"* ]]; then
+            echo "Prod APPLICATION_BASE_URL must be the approved HTTPS Front Door custom domain."
+            exit 1
+          fi
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - name: Initialize backend
+        working-directory: terraform
+        run: |
+          terraform init -reconfigure \
+            -backend-config="resource_group_name=${{ vars.TFSTATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ vars.TFSTATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ vars.TFSTATE_CONTAINER }}" \
+            -backend-config="key=terraform.tfstate" \
+            -backend-config="use_oidc=true"
+      - name: Select workspace
+        working-directory: terraform
+        run: terraform workspace select "${{ steps.target.outputs.environment }}" || terraform workspace new "${{ steps.target.outputs.environment }}"
+      - name: Create plan
+        working-directory: terraform
+        env:
+          APPLICATION_BASE_URL: ${{ vars.APPLICATION_BASE_URL }}
+        run: |
+          EXTRA_ARGS=()
+          if [[ "${{ steps.target.outputs.environment }}" == "prod" ]]; then
+            EXTRA_ARGS+=("-var=application_base_url=$APPLICATION_BASE_URL")
+          fi
+          terraform plan \
+            -var-file="environments/${{ steps.target.outputs.environment }}/terraform.tfvars" \
+            "${EXTRA_ARGS[@]}" \
+            -out="${{ steps.target.outputs.plan_name }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.target.outputs.plan_name }}
+          path: terraform/${{ steps.target.outputs.plan_name }}
+          if-no-files-found: error
+          retention-days: 7
+
+  apply:
+    if: github.event_name == 'workflow_dispatch'
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: ${{ needs.plan.outputs.environment }}
+    env:
+      TF_VAR_database_connection_string: ${{ secrets.DATABASE_CONNECTION_STRING }}
+    concurrency:
+      group: terraform-${{ needs.plan.outputs.environment }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.plan.outputs.plan_name }}
+          path: terraform
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - name: Initialize backend
+        working-directory: terraform
+        run: |
+          terraform init -reconfigure \
+            -backend-config="resource_group_name=${{ vars.TFSTATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ vars.TFSTATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ vars.TFSTATE_CONTAINER }}" \
+            -backend-config="key=terraform.tfstate" \
+            -backend-config="use_oidc=true"
+      - name: Select workspace
+        working-directory: terraform
+        run: terraform workspace select "${{ needs.plan.outputs.environment }}"
+      - name: Apply reviewed plan
+        working-directory: terraform
+        run: terraform apply -auto-approve "${{ needs.plan.outputs.plan_name }}"

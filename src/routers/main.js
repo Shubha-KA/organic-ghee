@@ -1,18 +1,14 @@
 const { Router } = require('express');
 const express = require('express');
-const session = require('express-session')
+const mongoose = require("mongoose");
+const bcrypt = require("bcrypt");
 const route = express.Router();
-const User = require('../modul/user')
-const dish = require("../modul/dish");
-const order = require('../modul/order')
-const { __express } = require('hbs');
-const fs = require('fs')
-const path = require('path')
-
-const uploadDir = path.join(__dirname, '..', '..', 'public', 'dishImage');
-if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
-}
+const User = require('../models/user')
+const dish = require("../models/dish");
+const order = require('../models/order')
+const { requireAdmin, requireCustomer, requireDashboardAccess } = require("../middleware/auth");
+const { deleteDishImage, uploadDishImage } = require("../services/blob-storage");
+const { enqueueNotification } = require("../services/notifications");
 
 route.get("/", (req, res) => {
     const loginUser = req.session.loginUser;
@@ -54,49 +50,58 @@ route.get("/foods/:page", async (req, res) => {
     })
 })
 route.post("/saveRegistration", async (req, res) => {
-    const data = await User.create(req.body)
-    res.render("login",{
-        newRegister:true
-    })
+    const password = await bcrypt.hash(req.body.password, 12);
+    await User.create({
+        name: req.body.name,
+        email: req.body.email,
+        phone: req.body.phone,
+        password,
+        address: req.body.address,
+        type: "normal"
+    });
+    res.render("login", {
+        newRegister: true
+    });
 })
 
 route.post("/loginUser", async (req, res) => {
-    const data = await User.findOne(req.body);
-    console.log(data);
+    const email = String(req.body.email || "").trim().toLowerCase();
+    const data = await User.findOne({ email, type: "normal" }).select("+password");
+    const passwordValid = data && await bcrypt.compare(req.body.password || "", data.password);
 
-    if (data == null) {
+    if (!passwordValid) {
         console.log("invalid passward or email");
         res.render("login", {
             invalid: true,
-            email: req.body.email
+            email
         })
     }
     else {
-        req.session.loginUser = data;
-        console.log('login user name : ' + req.session.loginUser.name);
-        res.redirect("/dashboard");
+        req.session.regenerate((error) => {
+            if (error) {
+                return res.status(500).send("Unable to create a secure session.");
+            }
+            req.session.loginUser = {
+                _id: data._id.toString(),
+                name: data.name,
+                email: data.email,
+                type: "normal"
+            };
+            return res.redirect("/dashboard");
+        });
     }
 })
 
-route.get("/dashboard", (req, res) => {
-    if (req.session.loginUser) {
-        const loginUser = req.session.loginUser;
-        if (req.session.loginUser.type == 'normal') {
-            console.log("normal user")
-            res.render("userPages/userDashboard", {
-                loginUser: loginUser
-            });
-        } else if (req.session.loginUser.type == 'admin') {
-            console.log('admin user');
-            res.render("adminDashboard", {
-                loginUser: loginUser
-            });
-        }
-    } else
-        res.render("login", {
-            loginFirst: true
-        })
+route.get("/dashboard", requireDashboardAccess, (req, res) => {
+    const loginUser = req.session.loginUser;
+    const view = loginUser.type === "admin"
+        ? "adminDashboard"
+        : "userPages/userDashboard";
+
+    return res.render(view, { loginUser });
 })
+
+route.use("/admin", requireAdmin);
 
 route.get("/admin/addDish", (req, res) => {
     if (req.session.loginUser) {
@@ -157,7 +162,7 @@ route.post("/searchFood", async (req, res) => {
 })
 
 //save dish here
-route.post('/saveDish', async (req, res) => {
+route.post('/saveDish', requireAdmin, async (req, res) => {
 
 
     if (req.files == null || req.body.ddiscount > 100 || req.body.dname == '' || req.body.dprice <= 0) {
@@ -167,11 +172,11 @@ route.post('/saveDish', async (req, res) => {
         return;
     }
     const { photo } = req.files;
-    const imageName=Math.random()+photo.name;
-    req.body.photo = imageName;
+    const image = await uploadDishImage(photo);
+    req.body.photo = image.name;
+    req.body.photoUrl = image.url;
     const data = await dish.create(req.body)
 
-    photo.mv(path.join(uploadDir, imageName));
     if (data) {
         console.log("dish save")
         res.render("addNewDish", {
@@ -189,8 +194,10 @@ route.post('/saveDish', async (req, res) => {
 route.get('/admin/deleteDish/:id', async (req, res) => {
     if (req.session.loginUser) {
         const loginUser = req.session.loginUser
+        const existingDish = await dish.findById(req.params.id);
         const data = await dish.deleteOne({ "_id": req.params.id })
         if (data) {
+            await deleteDishImage(existingDish?.photo);
             console.log("file is deleted...")
 
             currentPage = 1;
@@ -322,18 +329,11 @@ route.post("/admin/saveEditDish/:id", async (req, res) => {
         if (req.files == null)
             console.log("photo not selected")
         else {
-            console.log("photo to is selected ols photo is " + req.body.tempImage)
-            try {
-                fs.unlinkSync(path.join(uploadDir, req.body.tempImage))
-                console.log('old file is deleted')
-            } catch (e) {
-                console.log(e)
-            }
+            await deleteDishImage(req.body.tempImage);
             const { photo } = req.files
-            const imageName=Math.random()+photo.name;
-            req.body.photo =imageName;
-            photo.mv(path.join(uploadDir, imageName));
-            console.log(req.body.photo)
+            const image = await uploadDishImage(photo);
+            req.body.photo = image.name;
+            req.body.photoUrl = image.url;
         }
 
         const data = await dish.updateOne({ _id: req.params.id }, { $set: req.body })
@@ -351,14 +351,28 @@ route.post("/admin/saveEditDish/:id", async (req, res) => {
         })
 })
 route.get("/logout", (req, res) => {
+    if (req.session.admin) {
+        return res.redirect("/auth/admin/logout");
+    }
     req.session.destroy();
     res.render("login", {
         logout: true
     })
 })
 
+route.post("/contact", async (req, res) => {
+    await enqueueNotification({
+        type: "contact",
+        name: req.body.name,
+        email: req.body.email,
+        subject: req.body.subject,
+        message: req.body.message
+    });
+    return res.redirect("/?contact=sent");
+});
+
 //check out
-route.get("/user/orderFood", (req, res) => {
+route.get("/user/orderFood", requireCustomer, (req, res) => {
     if (req.session.loginUser) {
         const loginUser = req.session.loginUser
         res.render("userPages/userCheckout", {
@@ -371,7 +385,7 @@ route.get("/user/orderFood", (req, res) => {
     }
 })
 
-route.post("/orderNowFromBasket", (req, res) => {
+route.post("/orderNowFromBasket", requireCustomer, (req, res) => {
     if (req.session.loginUser) {
         res.redirect("/")
         const loginUser = req.session.loginUser;
@@ -395,9 +409,16 @@ route.post("/orderNowFromBasket", (req, res) => {
             }
             console.log(object)
             const data = await order.create(object);
-            console.log(data)
             if (data) {
-                console.log('data is save');
+                await enqueueNotification({
+                    type: "order-confirmation",
+                    recipient: loginUser.email,
+                    customerName: loginUser.name,
+                    orderId: data._id.toString(),
+                    dishName: item.name,
+                    quantity: item.quantity,
+                    price: item.price
+                });
             }
 
         });
@@ -409,7 +430,7 @@ route.post("/orderNowFromBasket", (req, res) => {
 })
 
 //order page
-route.get("/user/orders", async (req, res) => {
+route.get("/user/orders", requireCustomer, async (req, res) => {
     if (req.session.loginUser) {
         const loginUser = req.session.loginUser;
         const data = await order.find({ $and: [{ "states": { $ne: "deliverd" } }, { "userId": req.session.loginUser._id }] });
@@ -425,28 +446,36 @@ route.get("/user/orders", async (req, res) => {
     }
 })
 
-route.get("/user/cancelOrder/:id", async (req, res) => {
-    if (req.session.loginUser) {
-        const loginUser = req.session.loginUser;
-        const deleteData = await order.deleteOne({ _id: req.params.id });
+route.get("/user/cancelOrder/:id", requireCustomer, async (req, res) => {
+    const loginUser = req.session.loginUser;
+    const customerId = loginUser._id;
 
-
-        const data = await order.find({ $and: [{ "states": { $ne: "deliverd" } }, { "userId": req.session.loginUser._id }] });
-        console.log("find data : " + data)
-        if (deleteData)
-            res.render("userPages/userOrders", {
-                loginUser: loginUser,
-                orderFood: data,
-                cancelOrder: true
-            })
-    } else {
-        res.render("login", {
-            loginFirst: true
-        })
+    if (!mongoose.isObjectIdOrHexString(req.params.id)) {
+        return res.status(404).send("Order not found.");
     }
+
+    const deleteResult = await order.deleteOne({
+        _id: req.params.id,
+        userId: customerId
+    });
+
+    if (deleteResult.deletedCount !== 1) {
+        return res.status(404).send("Order not found.");
+    }
+
+    const data = await order.find({
+        states: { $ne: "deliverd" },
+        userId: customerId
+    });
+
+    return res.render("userPages/userOrders", {
+        loginUser,
+        orderFood: data,
+        cancelOrder: true
+    });
 })
 
-route.get("/user/history", async (req, res) => {
+route.get("/user/history", requireCustomer, async (req, res) => {
     if (req.session.loginUser) {
 
         const loginUser = req.session.loginUser;
