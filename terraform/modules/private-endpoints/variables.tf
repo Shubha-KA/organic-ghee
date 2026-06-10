@@ -46,6 +46,11 @@ variable "enable_app_service_endpoint" {
   default = false
 }
 
+variable "enable_app_services_dns_zone" {
+  type    = bool
+  default = false
+}
+
 variable "function_app_id" {
   type    = string
   default = null

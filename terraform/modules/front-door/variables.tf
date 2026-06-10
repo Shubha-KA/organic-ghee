@@ -22,6 +22,11 @@ variable "custom_domain_host_name" {
   type = string
 }
 
+variable "enable_custom_domain" {
+  type    = bool
+  default = true
+}
+
 variable "tags" {
   type = map(string)
 }

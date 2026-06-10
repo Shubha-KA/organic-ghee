@@ -3,5 +3,5 @@ output "endpoint_hostname" {
 }
 
 output "custom_domain_validation_token" {
-  value = azurerm_cdn_frontdoor_custom_domain.this.validation_token
+  value = var.enable_custom_domain ? azurerm_cdn_frontdoor_custom_domain.this[0].validation_token : null
 }

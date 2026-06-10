@@ -45,6 +45,11 @@ variable "app_service_location" {
   default = null
 }
 
+variable "cosmos_location" {
+  type    = string
+  default = null
+}
+
 variable "app_service_sku_name" {
   description = "App Service SKU name, for example F1 for Dev or P1v3 for Prod"
   type        = string
@@ -117,6 +122,11 @@ variable "enable_private_networking" {
 }
 
 variable "enable_front_door" {
+  type    = bool
+  default = false
+}
+
+variable "enable_application_gateway" {
   type    = bool
   default = false
 }

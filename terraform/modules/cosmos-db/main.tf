@@ -20,6 +20,7 @@ resource "azurerm_cosmosdb_account" "this" {
   geo_location {
     location          = var.location
     failover_priority = 0
+    zone_redundant    = false
   }
 
   backup {

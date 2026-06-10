@@ -53,7 +53,7 @@ locals {
     storage_table = "privatelink.table.core.windows.net"
     }, var.enable_cosmosdb_endpoint ? {
     cosmos_mongo = "privatelink.mongo.cosmos.azure.com"
-    } : {}, var.enable_app_service_endpoint || var.enable_function_app_endpoint ? {
+    } : {}, var.enable_app_services_dns_zone || var.enable_app_service_endpoint || var.enable_function_app_endpoint ? {
     app_services = "privatelink.azurewebsites.net"
   } : {})
 }

@@ -32,7 +32,7 @@ module "storage" {
   queue_name                    = "order-notifications"
   allow_blob_public_access      = false
   public_network_access_enabled = !local.private_networking_enabled
-  shared_access_key_enabled     = !local.is_prod
+  shared_access_key_enabled     = true
   tags                          = local.tags
 }
 
@@ -52,7 +52,7 @@ module "key_vault" {
   location                      = var.location
   resource_group_name           = module.resource_group.name
   tenant_id                     = var.tenant_id != "" ? var.tenant_id : data.azuread_client_config.current.tenant_id
-  purge_protection_enabled      = local.is_prod
+  purge_protection_enabled      = local.resource_locks_enabled
   soft_delete_retention_days    = local.is_prod ? 90 : 7
   public_network_access_enabled = !local.private_networking_enabled
   defer_public_network_lockdown = local.private_networking_enabled
@@ -76,7 +76,7 @@ module "cosmos" {
   source                        = "./modules/cosmos-db"
   name                          = lower("${local.prefix}-mongo")
   resource_group_name           = module.resource_group.name
-  location                      = var.location
+  location                      = local.cosmos_location
   database_name                 = "organic-ghee"
   free_tier_enabled             = var.cosmos_free_tier_enabled
   public_network_access_enabled = !local.private_networking_enabled
@@ -144,7 +144,7 @@ module "app_service" {
   resource_group_name           = module.resource_group.name
   sku_name                      = var.app_service_sku_name
   always_on                     = var.app_service_sku_name != "F1" && var.app_service_sku_name != "D1"
-  virtual_network_subnet_id     = local.private_networking_enabled ? module.network[0].app_subnet_id : null
+  virtual_network_subnet_id     = local.app_service_networking_enabled ? module.network[0].app_subnet_id : null
   public_network_access_enabled = !var.disable_app_service_public_access
   defer_public_network_lockdown = local.front_door_enabled && var.disable_app_service_public_access
   app_settings                  = local.app_settings
@@ -188,7 +188,8 @@ module "private_endpoints" {
   cosmosdb_account_id          = local.cosmos_enabled ? module.cosmos[0].id : null
   enable_cosmosdb_endpoint     = local.cosmos_enabled
   app_service_id               = module.app_service.id
-  enable_app_service_endpoint  = true
+  enable_app_service_endpoint  = local.app_service_networking_enabled
+  enable_app_services_dns_zone = true
   function_app_id              = local.function_enabled ? module.function_app[0].id : null
   enable_function_app_endpoint = local.function_enabled
   tags                         = local.tags
@@ -204,7 +205,20 @@ module "front_door" {
   origin_resource_id      = module.app_service.id
   origin_location         = local.app_service_location
   custom_domain_host_name = local.application_hostname
+  enable_custom_domain    = var.application_base_url != ""
   tags                    = local.tags
+}
+
+module "application_gateway" {
+  count = local.application_gateway_enabled ? 1 : 0
+
+  source              = "./modules/application-gateway"
+  name                = local.prefix
+  resource_group_name = module.resource_group.name
+  location            = var.location
+  subnet_id           = module.network[0].application_gateway_subnet_id
+  backend_host_name   = module.app_service.default_site_hostname
+  tags                = local.tags
 }
 
 resource "azapi_update_resource" "key_vault_network_lockdown" {

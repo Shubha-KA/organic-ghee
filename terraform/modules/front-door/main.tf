@@ -58,10 +58,12 @@ resource "azurerm_cdn_frontdoor_route" "this" {
   forwarding_protocol             = "HttpsOnly"
   https_redirect_enabled          = true
   link_to_default_domain          = true
-  cdn_frontdoor_custom_domain_ids = [azurerm_cdn_frontdoor_custom_domain.this.id]
+  cdn_frontdoor_custom_domain_ids = var.enable_custom_domain ? [azurerm_cdn_frontdoor_custom_domain.this[0].id] : []
 }
 
 resource "azurerm_cdn_frontdoor_custom_domain" "this" {
+  count = var.enable_custom_domain ? 1 : 0
+
   name                     = "${var.name}-domain"
   cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.this.id
   host_name                = var.custom_domain_host_name
