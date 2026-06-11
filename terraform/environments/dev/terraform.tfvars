@@ -19,7 +19,6 @@ enable_monitoring          = true
 enable_cosmos_db           = true
 enable_function_app        = false
 enable_private_networking  = true
-enable_front_door          = false
 enable_application_gateway = true
 enable_resource_locks      = true
 
